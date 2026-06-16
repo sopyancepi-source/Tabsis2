@@ -1,0 +1,6 @@
+{
+  "name": "Tabungan Siswa",
+  "description": "Aplikasi manajemen tabungan siswa, pinjaman sekolah, dan pinjaman guru.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
