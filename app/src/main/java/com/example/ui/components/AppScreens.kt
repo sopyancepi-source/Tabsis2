@@ -41,6 +41,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import android.print.PrintManager
+import android.webkit.WebView
+import android.content.Context
+import android.content.Intent
 import com.example.ui.UserRole
 import com.example.ui.MonthlyReport
 import com.example.ui.TabunganViewModel
@@ -49,6 +53,56 @@ import java.text.SimpleDateFormat
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
+
+fun printReceiptText(context: Context, docName: String, plainText: String) {
+    try {
+        val printManager = context.getSystemService(Context.PRINT_SERVICE) as PrintManager
+        val webView = WebView(context)
+        
+        val formattedHtmlText = plainText
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace(" ", "&nbsp;")
+            .replace("\n", "<br>")
+            
+        val htmlContent = """
+            <html>
+            <head>
+            <style>
+                body {
+                    font-family: 'Courier New', Courier, monospace;
+                    font-size: 14px;
+                    line-height: 1.3;
+                    margin: 5% 5% 5% 5%;
+                    color: #000000;
+                }
+            </style>
+            </head>
+            <body>$formattedHtmlText</body>
+            </html>
+        """.trimIndent()
+        
+        webView.loadDataWithBaseURL(null, htmlContent, "text/html", "UTF-8", null)
+        val printAdapter = webView.createPrintDocumentAdapter(docName)
+        printManager.print(docName, printAdapter, android.print.PrintAttributes.Builder().build())
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+}
+
+fun shareReceiptText(context: Context, subject: String, body: String) {
+    try {
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, subject)
+            putExtra(Intent.EXTRA_TEXT, body)
+        }
+        context.startActivity(Intent.createChooser(intent, "Bagikan Bukti Transaksi"))
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+}
 
 enum class AppTab(val title: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
     DASHBOARD("Dasbor", Icons.Default.Home),
@@ -74,6 +128,7 @@ fun MainAppScreen(viewModel: TabunganViewModel) {
     var showResetSuccessDialog by remember { mutableStateOf(false) }
     var showExportSuccess by remember { mutableStateOf(false) }
     var showExportError by remember { mutableStateOf(false) }
+    var showIdentityDialog by remember { mutableStateOf(false) }
 
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("text/csv")
@@ -172,6 +227,16 @@ fun MainAppScreen(viewModel: TabunganViewModel) {
                                         showChangePasswordDialog = true
                                     }
                                 )
+                                if (currentRole == UserRole.BENDAHARA) {
+                                    DropdownMenuItem(
+                                        text = { Text("Identitas Sekolah & Bendahara") },
+                                        leadingIcon = { Icon(Icons.Default.ManageAccounts, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFFE65100)) },
+                                        onClick = {
+                                            menuExpanded = false
+                                            showIdentityDialog = true
+                                        }
+                                    )
+                                }
                                 DropdownMenuItem(
                                     text = { Text("Tema Tampilan (Mata)") },
                                     leadingIcon = { Icon(Icons.Default.Palette, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary) },
@@ -472,6 +537,74 @@ fun MainAppScreen(viewModel: TabunganViewModel) {
                 text = { Text("Terjadi kesalahan saat mengekspor data Excel.") },
                 confirmButton = {
                     Button(onClick = { showExportError = false }) {
+                        Text("Tutup")
+                    }
+                }
+            )
+        }
+
+        if (showIdentityDialog) {
+            val sNameFlow by viewModel.schoolName.collectAsState()
+            val tNameFlow by viewModel.treasurerName.collectAsState()
+            var sNameInput by remember { mutableStateOf(sNameFlow) }
+            var tNameInput by remember { mutableStateOf(tNameFlow) }
+            var saveSuccessMessage by remember { mutableStateOf("") }
+
+            AlertDialog(
+                onDismissRequest = { showIdentityDialog = false },
+                title = { Text("Pengaturan Identitas", fontWeight = FontWeight.Bold) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            "Atur identitas Sekolah dan Bendahara secara fleksibel guna dicantumkan pada seluruh lembar laporan cetak (kuitansi) serta ringkasan di dashboard.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+
+                        OutlinedTextField(
+                            value = sNameInput,
+                            onValueChange = { sNameInput = it },
+                            label = { Text("Nama Sekolah") },
+                            placeholder = { Text("Contoh: MIS CIBUNGUR I") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        OutlinedTextField(
+                            value = tNameInput,
+                            onValueChange = { tNameInput = it },
+                            label = { Text("Nama Bendahara") },
+                            placeholder = { Text("Contoh: Cepi Sopyan, S.Pd.I") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        if (saveSuccessMessage.isNotEmpty()) {
+                            Text(
+                                text = saveSuccessMessage,
+                                color = if (saveSuccessMessage.contains("berhasil")) Color(0xFF2E7D32) else MaterialTheme.colorScheme.error,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            if (sNameInput.isNotBlank() && tNameInput.isNotBlank()) {
+                                viewModel.updateIdentitySettings(sNameInput, tNameInput)
+                                saveSuccessMessage = "Identitas berhasil disimpan & diperbarui!"
+                            } else {
+                                saveSuccessMessage = "Nama sekolah & bendahara tidak boleh kosong!"
+                            }
+                        }
+                    ) {
+                        Text("Simpan")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showIdentityDialog = false }) {
                         Text("Tutup")
                     }
                 }
@@ -987,6 +1120,8 @@ fun LoginScreen(viewModel: TabunganViewModel) {
 @Composable
 fun DashboardScreen(viewModel: TabunganViewModel, onNavigateToTab: (AppTab) -> Unit) {
     val currentRole by viewModel.currentRole.collectAsState()
+    val schoolName by viewModel.schoolName.collectAsState()
+    val treasurerName by viewModel.treasurerName.collectAsState()
     val totalTabungan by viewModel.totalTabunganSiswa.collectAsState()
     val outSchool by viewModel.outstandingPinjamanSekolah.collectAsState()
     val outTeacher by viewModel.outstandingPinjamanGuru.collectAsState()
@@ -1087,6 +1222,63 @@ fun DashboardScreen(viewModel: TabunganViewModel, onNavigateToTab: (AppTab) -> U
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        item {
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                ),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.primary),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.School,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = schoolName,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 15.sp,
+                            color = MaterialTheme.colorScheme.primary,
+                            letterSpacing = 0.5.sp
+                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Person,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(12.dp)
+                            )
+                            Text(
+                                text = "Bendahara: $treasurerName",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         if (currentRole == UserRole.KEPALA) {
             item {
                 Card(
@@ -1536,6 +1728,9 @@ fun MutationItem(
     viewModel: TabunganViewModel,
     onDeleteClick: (() -> Unit)? = null
 ) {
+    val schoolName by viewModel.schoolName.collectAsState()
+    val treasurerName by viewModel.treasurerName.collectAsState()
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -2199,7 +2394,10 @@ fun SiswaHistoryDialog(
     viewModel: TabunganViewModel,
     onDismiss: () -> Unit
 ) {
+    val schoolName by viewModel.schoolName.collectAsState()
+    val treasurerName by viewModel.treasurerName.collectAsState()
     var txToDelete by remember { mutableStateOf<Transaksi?>(null) }
+    var selectedTxForReceipt by remember { mutableStateOf<Transaksi?>(null) }
 
     if (txToDelete != null) {
         val tx = txToDelete!!
@@ -2319,6 +2517,18 @@ fun SiswaHistoryDialog(
                                         }
                                     }
 
+                                    IconButton(
+                                        onClick = { selectedTxForReceipt = tx },
+                                        modifier = Modifier.size(28.dp).testTag("print_dialog_mutation_${tx.id}")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Print,
+                                            contentDescription = "Cetak Slip",
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+
                                     val currentRole by viewModel.currentRole.collectAsState()
                                     if (currentRole == UserRole.BENDAHARA || currentRole == UserRole.ADMIN) {
                                         IconButton(
@@ -2348,6 +2558,94 @@ fun SiswaHistoryDialog(
             }
         }
     }
+
+    selectedTxForReceipt?.let { tx ->
+        Dialog(onDismissRequest = { selectedTxForReceipt = null }) {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                modifier = Modifier.padding(16.dp).fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text("Simulasi Cetak Slip", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    
+                    val formattedTime = SimpleDateFormat("HH:mm:ss", Locale("id", "ID")).format(Date(tx.tanggal))
+                    val bodyText = 
+                        "       SLIP MUTASI TABUNGAN\n" +
+                        "         ${schoolName.uppercase(Locale("id", "ID"))}\n" +
+                        "=================================\n" +
+                        "Nasabah  : ${siswa.nama}\n" +
+                        "NIS      : ${siswa.nomorInduk}\n" +
+                        "Kelas    : ${siswa.kelas}\n" +
+                        "---------------------------------\n" +
+                        "Tanggal  : ${viewModel.formatDateShort(tx.tanggal)}\n" +
+                        "Waktu    : $formattedTime WIB\n" +
+                        "Petugas  : $treasurerName\n" +
+                        "---------------------------------\n" +
+                        "Tipe     : ${if (tx.tipe == "SETOR") "SETORAN MASUK (+)" else "PENARIKAN TUNAI (-)"}\n" +
+                        "Jumlah   : ${viewModel.formatRupiah(tx.jumlah)}\n" +
+                        "Admin    : ${viewModel.formatRupiah(tx.biayaAdmin)}\n" +
+                        "Ket      : ${if (tx.keterangan.isEmpty()) "-" else tx.keterangan}\n" +
+                        "=================================\n" +
+                        "     [TERVERIFIKASI SISTEM]\n" +
+                        "   Simulasi Printer POS-58mm"
+                        
+                    Box(
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .heightIn(max = 240.dp)
+                            .background(Color(0xFFF5F5F5), RoundedCornerShape(8.dp))
+                            .verticalScroll(rememberScrollState())
+                            .padding(12.dp)
+                            .fillMaxWidth()
+                    ) {
+                        Text(
+                            text = bodyText,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    
+                    val context = LocalContext.current
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedButton(
+                            onClick = { shareReceiptText(context, "Slip Mutasi Tabungan", bodyText) },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Bagikan")
+                        }
+                        
+                        Button(
+                            onClick = { printReceiptText(context, "Slip_Mutasi_Tabungan", bodyText) },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Print, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Unduh/Cetak")
+                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = { selectedTxForReceipt = null },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Tutup Preview")
+                    }
+                }
+            }
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -2357,8 +2655,14 @@ fun TabunganScreen(viewModel: TabunganViewModel) {
     val transList by viewModel.transaksiList.collectAsState()
     val siswaList by viewModel.siswaList.collectAsState()
     val balances by viewModel.siswaBalances.collectAsState()
+    val schoolName by viewModel.schoolName.collectAsState()
+    val treasurerName by viewModel.treasurerName.collectAsState()
 
     var txToDelete by remember { mutableStateOf<Transaksi?>(null) }
+
+    val reportCalendar = remember { java.util.Calendar.getInstance() }
+    var selectedMonthIndex by remember { mutableStateOf(reportCalendar.get(java.util.Calendar.MONTH)) }
+    var selectedYear by remember { mutableStateOf(reportCalendar.get(java.util.Calendar.YEAR)) }
 
     if (txToDelete != null) {
         val tx = txToDelete!!
@@ -2643,6 +2947,351 @@ fun TabunganScreen(viewModel: TabunganViewModel) {
                         }
                     }
 
+                    item {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+                            modifier = Modifier.fillMaxWidth(),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Event,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                    Text(
+                                        text = "Cari & Cetak Laporan Pilihan",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 14.sp,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                                
+                                Text(
+                                    text = "Silakan tentukan bulan dan tahun laporannya di bawah ini untuk melihat rangkuman serta mencetak kuitansi kas.",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+
+                                var monthDropdownExpanded by remember { mutableStateOf(false) }
+                                var yearDropdownExpanded by remember { mutableStateOf(false) }
+
+                                val indonesianMonths = listOf(
+                                    "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+                                    "Juli", "Agustus", "September", "Oktober", "November", "Desember"
+                                )
+                                val availableYears = (2024..2030).toList()
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    // Month Selector dropdown
+                                    Box(modifier = Modifier.weight(1.2f)) {
+                                        OutlinedTextField(
+                                            value = indonesianMonths[selectedMonthIndex],
+                                            onValueChange = {},
+                                            readOnly = true,
+                                            label = { Text("Pilih Bulan") },
+                                            trailingIcon = { Icon(Icons.Default.ArrowDropDown, contentDescription = null) },
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                        Box(
+                                            modifier = Modifier
+                                                .matchParentSize()
+                                                .clickable { monthDropdownExpanded = true }
+                                        )
+                                        DropdownMenu(
+                                            expanded = monthDropdownExpanded,
+                                            onDismissRequest = { monthDropdownExpanded = false }
+                                        ) {
+                                            indonesianMonths.forEachIndexed { index, mName ->
+                                                DropdownMenuItem(
+                                                    text = { Text(mName) },
+                                                    onClick = {
+                                                        selectedMonthIndex = index
+                                                        monthDropdownExpanded = false
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    // Year Selector dropdown
+                                    Box(modifier = Modifier.weight(0.8f)) {
+                                        OutlinedTextField(
+                                            value = selectedYear.toString(),
+                                            onValueChange = {},
+                                            readOnly = true,
+                                            label = { Text("Tahun") },
+                                            trailingIcon = { Icon(Icons.Default.ArrowDropDown, contentDescription = null) },
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                        Box(
+                                            modifier = Modifier
+                                                .matchParentSize()
+                                                .clickable { yearDropdownExpanded = true }
+                                        )
+                                        DropdownMenu(
+                                            expanded = yearDropdownExpanded,
+                                            onDismissRequest = { yearDropdownExpanded = false }
+                                        ) {
+                                            availableYears.forEach { yr ->
+                                                DropdownMenuItem(
+                                                    text = { Text(yr.toString()) },
+                                                    onClick = {
+                                                        selectedYear = yr
+                                                        yearDropdownExpanded = false
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // We calculate the dynamic MonthlyReport for the chosen Month and Year!
+                                val targetMonthYear = "${indonesianMonths[selectedMonthIndex]} $selectedYear"
+                                val customReport = remember(transList, selectedMonthIndex, selectedYear) {
+                                    val filteredTrans = transList.filter { tx ->
+                                        try {
+                                            val cal = java.util.Calendar.getInstance().apply { timeInMillis = tx.tanggal }
+                                            cal.get(java.util.Calendar.MONTH) == selectedMonthIndex && cal.get(java.util.Calendar.YEAR) == selectedYear
+                                        } catch (e: Exception) {
+                                            false
+                                        }
+                                    }
+                                    var tSetor = 0.0
+                                    var cSetor = 0
+                                    var tTarik = 0.0
+                                    var cTarik = 0
+                                    var tAdmin = 0.0
+                                    
+                                    for (t in filteredTrans) {
+                                        if (t.tipe == "SETOR") {
+                                            tSetor += t.jumlah
+                                            cSetor++
+                                        } else {
+                                            tTarik += t.jumlah
+                                            cTarik++
+                                        }
+                                        tAdmin += t.biayaAdmin
+                                    }
+                                    
+                                    MonthlyReport(
+                                        monthYear = targetMonthYear,
+                                        totalSetor = tSetor,
+                                        jumlahSetorCount = cSetor,
+                                        totalTarik = tTarik,
+                                        jumlahTarikCount = cTarik,
+                                        totalBiayaAdmin = tAdmin
+                                    )
+                                }
+
+                                Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
+
+                                // Visual presentation of the chosen month's data
+                                Text(
+                                    text = "Rangkuman Data: $targetMonthYear",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+
+                                Row(modifier = Modifier.fillMaxWidth()) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text("Total Setoran", fontSize = 10.sp, color = Color.Gray)
+                                        Text(
+                                            "${viewModel.formatRupiah(customReport.totalSetor)} (${customReport.jumlahSetorCount} tx)",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp,
+                                            color = Color(0xFF2E7D32)
+                                        )
+                                    }
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text("Total Penarikan", fontSize = 10.sp, color = Color.Gray)
+                                        Text(
+                                            "${viewModel.formatRupiah(customReport.totalTarik)} (${customReport.jumlahTarikCount} tx)",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp,
+                                            color = Color(0xFFC62828)
+                                        )
+                                    }
+                                }
+
+                                Row(modifier = Modifier.fillMaxWidth()) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text("Laba Admin", fontSize = 10.sp, color = Color.Gray)
+                                        Text(
+                                            viewModel.formatRupiah(customReport.totalBiayaAdmin),
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp,
+                                            color = Color(0xFF004D40)
+                                        )
+                                    }
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text("Arus Kas Netto", fontSize = 10.sp, color = Color.Gray)
+                                        val customNet = customReport.totalSetor - customReport.totalTarik
+                                        Text(
+                                            (if (customNet >= 0) "+" else "") + viewModel.formatRupiah(customNet),
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp,
+                                            color = if (customNet >= 0) Color(0xFF2E7D32) else Color(0xFFC62828)
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(4.dp))
+
+                                // Render the print card for this computed report!
+                                var showCustomPrintByDialog by remember { mutableStateOf(false) }
+
+                                Button(
+                                    onClick = { showCustomPrintByDialog = true },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100)), // Rich Accent Color
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Icon(Icons.Default.Print, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Text("Cetak Laporan Bulan Terpilih", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                    }
+                                }
+
+                                if (showCustomPrintByDialog) {
+                                    val transListState by viewModel.transaksiList.collectAsState()
+                                    val siswaListState by viewModel.siswaList.collectAsState()
+
+                                    Dialog(onDismissRequest = { showCustomPrintByDialog = false }) {
+                                        Card(
+                                            shape = RoundedCornerShape(16.dp),
+                                            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                                            modifier = Modifier.padding(8.dp).fillMaxWidth()
+                                        ) {
+                                            Column(
+                                                modifier = Modifier.padding(16.dp),
+                                                verticalArrangement = Arrangement.spacedBy(12.dp),
+                                                horizontalAlignment = Alignment.CenterHorizontally
+                                            ) {
+                                                Text("Cetak Laporan Bulanan (Pilihan)", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                                
+                                                val monthSdf = SimpleDateFormat("MMMM yyyy", Locale("id", "ID"))
+                                                val monthlyTrans = transListState.filter { tx ->
+                                                    try {
+                                                        monthSdf.format(Date(tx.tanggal)) == customReport.monthYear
+                                                    } catch (e: Exception) {
+                                                        false
+                                                    }
+                                                }
+
+                                                val bodyText = buildString {
+                                                    append("         ${schoolName.uppercase(Locale("id", "ID"))}\n")
+                                                    append("      REKAPITULASI PELAPORAN\n")
+                                                    append("         KEUANGAN BULANAN\n")
+                                                    append("=================================\n")
+                                                    append("Periode  : ${customReport.monthYear}\n")
+                                                    append("Tanggal  : ${SimpleDateFormat("dd/MM/yyyy HH:mm", Locale("id", "ID")).format(Date())}\n")
+                                                    append("=================================\n")
+                                                    append("Setoran  : ${viewModel.formatRupiah(customReport.totalSetor)}\n")
+                                                    append("           (${customReport.jumlahSetorCount} transaksi)\n")
+                                                    append("- - - - - - - - - - - - - - - - -\n")
+                                                    append("Penarikan: ${viewModel.formatRupiah(customReport.totalTarik)}\n")
+                                                    append("           (${customReport.jumlahTarikCount} transaksi)\n")
+                                                    append("=================================\n")
+                                                    append("PENDAPATAN ADMIN: ${viewModel.formatRupiah(customReport.totalBiayaAdmin)}\n")
+                                                    append("Arus Kas Netto  : ${viewModel.formatRupiah(customReport.totalSetor - customReport.totalTarik)}\n")
+                                                    append("=================================\n")
+                                                    append("         MUTASI TRANSAKSI\n")
+                                                    append("---------------------------------\n")
+                                                    if (monthlyTrans.isEmpty()) {
+                                                        append("  Tidak ada transaksi bulan ini\n")
+                                                    } else {
+                                                        monthlyTrans.forEachIndexed { idx, tx ->
+                                                            val s = siswaListState.find { it.id == tx.siswaId }
+                                                            val name = s?.nama ?: "Nasabah"
+                                                            val sClass = s?.kelas ?: "-"
+                                                            val dateStr = SimpleDateFormat("dd/MM/yyyy", Locale("id", "ID")).format(Date(tx.tanggal))
+                                                            val typeLabel = if (tx.tipe == "SETOR") "Setor [+]" else "Tarik [-]"
+                                                            append("${idx + 1}. $dateStr | $name ($sClass)\n")
+                                                            append("   $typeLabel: ${viewModel.formatRupiah(tx.jumlah)}\n")
+                                                            if (tx.biayaAdmin > 0) {
+                                                                append("   Admin   : ${viewModel.formatRupiah(tx.biayaAdmin)}\n")
+                                                            }
+                                                            append("---------------------------------\n")
+                                                        }
+                                                    }
+                                                    append("Bendahara: $treasurerName\n")
+                                                    append("=================================\n")
+                                                    append("     [TERVERIFIKASI SISTEM]\n")
+                                                    append("   Simulasi Printer POS-58mm")
+                                                }
+
+                                                Box(
+                                                    modifier = Modifier
+                                                        .weight(1f, fill = false)
+                                                        .heightIn(max = 280.dp)
+                                                        .background(Color(0xFFF5F5F5), RoundedCornerShape(8.dp))
+                                                        .verticalScroll(rememberScrollState())
+                                                        .padding(12.dp)
+                                                        .fillMaxWidth()
+                                                ) {
+                                                    Text(
+                                                        text = bodyText,
+                                                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                                        fontSize = 11.sp,
+                                                        modifier = Modifier.fillMaxWidth()
+                                                    )
+                                                }
+
+                                                val context = LocalContext.current
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    OutlinedButton(
+                                                        onClick = { shareReceiptText(context, "Laporan Bulanan ${customReport.monthYear}", bodyText) },
+                                                        modifier = Modifier.weight(1f)
+                                                    ) {
+                                                        Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                        Spacer(modifier = Modifier.width(4.dp))
+                                                        Text("Bagikan")
+                                                    }
+                                                    
+                                                    Button(
+                                                        onClick = { printReceiptText(context, "Laporan_Bulanan_${customReport.monthYear.replace(" ", "_")}", bodyText) },
+                                                        modifier = Modifier.weight(1f)
+                                                    ) {
+                                                        Icon(Icons.Default.Print, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                        Spacer(modifier = Modifier.width(4.dp))
+                                                        Text("Unduh/Cetak")
+                                                    }
+                                                }
+
+                                                OutlinedButton(
+                                                    onClick = { showCustomPrintByDialog = false },
+                                                    modifier = Modifier.fillMaxWidth()
+                                                ) {
+                                                    Text("Tutup Preview")
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     if (reports.isEmpty()) {
                         item {
                             Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
@@ -2662,6 +3311,8 @@ fun TabunganScreen(viewModel: TabunganViewModel) {
 
 @Composable
 fun MonthlyReportCard(report: MonthlyReport, viewModel: TabunganViewModel) {
+    val schoolName by viewModel.schoolName.collectAsState()
+    val treasurerName by viewModel.treasurerName.collectAsState()
     var showDialog by remember { mutableStateOf(false) }
 
     Card(
@@ -2729,38 +3380,119 @@ fun MonthlyReportCard(report: MonthlyReport, viewModel: TabunganViewModel) {
     }
 
     if (showDialog) {
+        val transList by viewModel.transaksiList.collectAsState()
+        val siswaList by viewModel.siswaList.collectAsState()
+
         Dialog(onDismissRequest = { showDialog = false }) {
             Card(
                 shape = RoundedCornerShape(16.dp),
-                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                modifier = Modifier.padding(8.dp).fillMaxWidth()
             ) {
                 Column(
-                    modifier = Modifier.padding(20.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text("Simulasi Print Laporan", fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                    Text(
-                        "REKAPITULASI PELAPORAN KEUANGAN BULANAN\n" +
-                                "Periode : ${report.monthYear}\n" +
-                                "=============================\n" +
-                                "Setoran Masuk       : ${viewModel.formatRupiah(report.totalSetor)}\n" +
-                                "Jumlah Transaksi    : ${report.jumlahSetorCount} Kali\n" +
-                                "-----------------------------\n" +
-                                "Penarikan Keluar    : ${viewModel.formatRupiah(report.totalTarik)}\n" +
-                                "Jumlah Transaksi    : ${report.jumlahTarikCount} Kali\n" +
-                                "=============================\n" +
-                                "PENDAPATAN ADMIN    : ${viewModel.formatRupiah(report.totalBiayaAdmin)}\n" +
-                                "Kas Bersih Bulanan  : ${viewModel.formatRupiah(report.totalSetor - report.totalTarik)}\n\n" +
-                                "*Laporan Terverifikasi Sistem Otomatis*",
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                        fontSize = 11.sp,
+                    Text("Cetak Laporan Bulanan", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    
+                    val monthSdf = SimpleDateFormat("MMMM yyyy", Locale("id", "ID"))
+                    val monthlyTrans = transList.filter { tx ->
+                        try {
+                            monthSdf.format(Date(tx.tanggal)) == report.monthYear
+                        } catch (e: Exception) {
+                            false
+                        }
+                    }
+
+                    val bodyText = buildString {
+                        append("         ${schoolName.uppercase(Locale("id", "ID"))}\n")
+                        append("      REKAPITULASI PELAPORAN\n")
+                        append("         KEUANGAN BULANAN\n")
+                        append("=================================\n")
+                        append("Periode  : ${report.monthYear}\n")
+                        append("Tanggal  : ${SimpleDateFormat("dd/MM/yyyy HH:mm", Locale("id", "ID")).format(Date())}\n")
+                        append("=================================\n")
+                        append("Setoran  : ${viewModel.formatRupiah(report.totalSetor)}\n")
+                        append("           (${report.jumlahSetorCount} transaksi)\n")
+                        append("- - - - - - - - - - - - - - - - -\n")
+                        append("Penarikan: ${viewModel.formatRupiah(report.totalTarik)}\n")
+                        append("           (${report.jumlahTarikCount} transaksi)\n")
+                        append("=================================\n")
+                        append("PENDAPATAN ADMIN: ${viewModel.formatRupiah(report.totalBiayaAdmin)}\n")
+                        append("Arus Kas Netto  : ${viewModel.formatRupiah(report.totalSetor - report.totalTarik)}\n")
+                        append("=================================\n")
+                        append("         MUTASI TRANSAKSI\n")
+                        append("---------------------------------\n")
+                        if (monthlyTrans.isEmpty()) {
+                            append("  Tidak ada transaksi bulan ini\n")
+                        } else {
+                            monthlyTrans.forEachIndexed { idx, tx ->
+                                val s = siswaList.find { it.id == tx.siswaId }
+                                val name = s?.nama ?: "Nasabah"
+                                val sClass = s?.kelas ?: "-"
+                                val dateStr = SimpleDateFormat("dd/MM/yyyy", Locale("id", "ID")).format(Date(tx.tanggal))
+                                val typeLabel = if (tx.tipe == "SETOR") "Setor [+]" else "Tarik [-]"
+                                append("${idx + 1}. $dateStr | $name ($sClass)\n")
+                                append("   $typeLabel: ${viewModel.formatRupiah(tx.jumlah)}\n")
+                                if (tx.biayaAdmin > 0) {
+                                    append("   Admin   : ${viewModel.formatRupiah(tx.biayaAdmin)}\n")
+                                }
+                                append("---------------------------------\n")
+                            }
+                        }
+                        append("Bendahara: $treasurerName\n")
+                        append("=================================\n")
+                        append("     [TERVERIFIKASI SISTEM]\n")
+                        append("   Simulasi Printer POS-58mm")
+                    }
+
+                    Box(
                         modifier = Modifier
+                            .weight(1f, fill = false)
+                            .heightIn(max = 280.dp)
                             .background(Color(0xFFF5F5F5), RoundedCornerShape(8.dp))
+                            .verticalScroll(rememberScrollState())
                             .padding(12.dp)
                             .fillMaxWidth()
-                    )
-                    Button(onClick = { showDialog = false }, modifier = Modifier.fillMaxWidth()) {
+                    ) {
+                        Text(
+                            text = bodyText,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+
+                    val context = LocalContext.current
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedButton(
+                            onClick = { shareReceiptText(context, "Laporan Bulanan ${report.monthYear}", bodyText) },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Bagikan")
+                        }
+                        
+                        Button(
+                            onClick = { printReceiptText(context, "Laporan_Bulanan_${report.monthYear.replace(" ", "_")}", bodyText) },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Print, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Unduh/Cetak")
+                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = { showDialog = false },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
                         Text("Tutup Preview")
                     }
                 }
@@ -2773,6 +3505,8 @@ fun MonthlyReportCard(report: MonthlyReport, viewModel: TabunganViewModel) {
 fun SchoolLoansScreen(viewModel: TabunganViewModel) {
     val context = LocalContext.current
     val loans by viewModel.pinjamanSekolahList.collectAsState()
+    val schoolName by viewModel.schoolName.collectAsState()
+    val treasurerName by viewModel.treasurerName.collectAsState()
 
     var descInput by remember { mutableStateOf("") }
     var amountInput by remember { mutableStateOf("") }
@@ -2780,6 +3514,7 @@ fun SchoolLoansScreen(viewModel: TabunganViewModel) {
 
     var showExportSuccess by remember { mutableStateOf(false) }
     var showExportError by remember { mutableStateOf(false) }
+    var showPrintSchoolSummaryDialog by remember { mutableStateOf(false) }
 
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("text/csv")
@@ -2967,41 +3702,69 @@ fun SchoolLoansScreen(viewModel: TabunganViewModel) {
         }
 
         item {
-            Row(
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Text(
                     text = "Daftar Pinjaman Berjalan (${activeLoans.size})",
                     fontWeight = FontWeight.Bold,
                     style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.weight(1f)
                 )
 
-                Spacer(modifier = Modifier.width(8.dp))
-
-                Button(
-                    onClick = {
-                        exportLauncher.launch("Rekap_Pinjaman_Sekolah_dan_Guru_${System.currentTimeMillis()}.csv")
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFF2E7D32), // Emerald Green
-                        contentColor = Color.White
-                    ),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                    shape = RoundedCornerShape(8.dp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    Button(
+                        onClick = {
+                            exportLauncher.launch("Rekap_Pinjaman_Sekolah_dan_Guru_${System.currentTimeMillis()}.csv")
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF2E7D32), // Emerald Green
+                            contentColor = Color.White
+                        ),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.weight(1f)
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Description,
-                            contentDescription = "Ekspor Excel Pinjaman",
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Text("Ekspor Excel", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Description,
+                                contentDescription = "Ekspor Excel Pinjaman",
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text("Ekspor Excel", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        }
+                    }
+
+                    Button(
+                        onClick = {
+                            showPrintSchoolSummaryDialog = true
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFFE65100), // Orange Accent
+                            contentColor = Color.White
+                        ),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Print,
+                                contentDescription = "Cetak Rekap Pinjaman",
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text("Cetak Rekap Aktif", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        }
                     }
                 }
             }
@@ -3113,6 +3876,115 @@ fun SchoolLoansScreen(viewModel: TabunganViewModel) {
             }
         )
     }
+
+    if (showPrintSchoolSummaryDialog) {
+        Dialog(onDismissRequest = { showPrintSchoolSummaryDialog = false }) {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                modifier = Modifier.padding(8.dp).fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text("Cetak Rekap Dana Talangan Sekolah", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+
+                    val unpaidLoans = loans.filter { !it.lunas }
+                    val totalTagihanAktif = unpaidLoans.sumOf { it.jumlahPinjam - it.jumlahBayar }
+
+                    val bodyText = buildString {
+                        append("         ${schoolName.uppercase(Locale("id", "ID"))}\n")
+                        append("      REKAPITULASI PIUTANG KAS\n")
+                        append("       DANA TALANGAN SEKOLAH\n")
+                        append("=================================\n")
+                        append("Hari/Tgl : ${SimpleDateFormat("dd/MM/yyyy HH:mm", Locale("id", "ID")).format(Date())}\n")
+                        append("=================================\n")
+                        
+                        if (unpaidLoans.isEmpty()) {
+                            append("  Tidak ada dana talangan aktif.\n")
+                        } else {
+                            unpaidLoans.sortedBy { it.tanggalPinjam }.forEachIndexed { idx, loan ->
+                                val dateStr = SimpleDateFormat("dd/MM/yyyy", Locale("id", "ID")).format(Date(loan.tanggalPinjam))
+                                val statusLabel = when {
+                                    loan.lunas -> "LUNAS"
+                                    loan.jumlahBayar > 0.0 -> "CICIL"
+                                    else -> "BELUM LUNAS"
+                                }
+                                append("#${idx + 1} $dateStr\n")
+                                append("   Ket      : ${loan.deskripsi}\n")
+                                append("   Pinjaman : ${viewModel.formatRupiah(loan.jumlahPinjam)}\n")
+                                if (loan.jumlahBayar > 0.0) {
+                                    append("   Dibayar  : ${viewModel.formatRupiah(loan.jumlahBayar)}\n")
+                                    val sisa = loan.jumlahPinjam - loan.jumlahBayar
+                                    append("   Sisa     : ${viewModel.formatRupiah(sisa)}\n")
+                                }
+                                append("   Status   : $statusLabel\n")
+                                append("- - - - - - - - - - - - - - - - -\n")
+                            }
+                        }
+                        
+                        append("TOTAL OUTSTANDING SEKOLAH:\n")
+                        append(">> ${viewModel.formatRupiah(totalTagihanAktif)}\n")
+                        append("=================================\n")
+                        append("Bendahara: $treasurerName\n")
+                        append("=================================\n")
+                        append("     [TERVERIFIKASI SISTEM]\n")
+                        append("   Simulasi Printer POS-58mm")
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .heightIn(max = 280.dp)
+                            .background(Color(0xFFF5F5F5), RoundedCornerShape(8.dp))
+                            .verticalScroll(rememberScrollState())
+                            .padding(12.dp)
+                            .fillMaxWidth()
+                    ) {
+                        Text(
+                            text = bodyText,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedButton(
+                            onClick = { shareReceiptText(context, "Rekap Dana Talangan Sekolah", bodyText) },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Bagikan")
+                        }
+                        
+                        Button(
+                            onClick = { printReceiptText(context, "Rekap_Dana_Talangan_Sekolah", bodyText) },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Print, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Unduh/Cetak")
+                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = { showPrintSchoolSummaryDialog = false },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Tutup Preview")
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -3122,7 +3994,10 @@ fun SchoolLoanItem(
     onPayClick: () -> Unit,
     onDeleteClick: () -> Unit
 ) {
+    val schoolName by viewModel.schoolName.collectAsState()
+    val treasurerName by viewModel.treasurerName.collectAsState()
     val remaining = loan.jumlahPinjam - loan.jumlahBayar
+    var showPrintReceipt by remember { mutableStateOf(false) }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -3183,6 +4058,9 @@ fun SchoolLoanItem(
                     IconButton(onClick = onDeleteClick) {
                         Icon(Icons.Default.Delete, contentDescription = "Hapus", tint = MaterialTheme.colorScheme.error)
                     }
+                    IconButton(onClick = { showPrintReceipt = true }) {
+                        Icon(Icons.Default.Print, contentDescription = "Cetak", tint = MaterialTheme.colorScheme.primary)
+                    }
                     Button(
                         onClick = onPayClick,
                         shape = RoundedCornerShape(8.dp),
@@ -3193,8 +4071,103 @@ fun SchoolLoanItem(
                     }
                 }
             } else {
-                loan.tanggalLunas?.let { tLunas ->
-                    Text("Dilunasi pada: ${viewModel.formatDate(tLunas)}", fontSize = 10.sp, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic, color = Color.Gray)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    loan.tanggalLunas?.let { tLunas ->
+                        Text("Dilunasi pada: ${viewModel.formatDate(tLunas)}", fontSize = 10.sp, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic, color = Color.Gray)
+                    }
+                    IconButton(onClick = { showPrintReceipt = true }) {
+                        Icon(Icons.Default.Print, contentDescription = "Cetak", tint = MaterialTheme.colorScheme.primary)
+                    }
+                }
+            }
+        }
+    }
+
+    if (showPrintReceipt) {
+        Dialog(onDismissRequest = { showPrintReceipt = false }) {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                modifier = Modifier.padding(16.dp).fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text("Simulasi Cetak Slip", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    
+                    val bodyText = 
+                        "       BUKTI PINJAMAN KEUANGAN\n" +
+                        "         ${schoolName.uppercase(Locale("id", "ID"))}\n" +
+                        "=================================\n" +
+                        "ID Slip  : TAL-SCH-${loan.id}\n" +
+                        "Tanggal  : ${viewModel.formatDate(loan.tanggalPinjam)}\n" +
+                        "Desk     : ${loan.deskripsi}\n" +
+                        "---------------------------------\n" +
+                        "Jumlah   : ${viewModel.formatRupiah(loan.jumlahPinjam)}\n" +
+                        "Dibayar  : ${viewModel.formatRupiah(loan.jumlahBayar)}\n" +
+                        "Sisa     : ${viewModel.formatRupiah(loan.jumlahPinjam - loan.jumlahBayar)}\n" +
+                        "Status   : ${if (loan.lunas) "LUNAS SEPENUHNYA" else "BELUM LUNAS"}\n" +
+                        "---------------------------------\n" +
+                        "Sifat    : Internal Keuangan\n" +
+                        "Otorisator: $treasurerName\n" +
+                        "=================================\n" +
+                        "     [TERVERIFIKASI SISTEM]\n" +
+                        "   Simulasi Printer POS-58mm"
+                        
+                    Box(
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .heightIn(max = 240.dp)
+                            .background(Color(0xFFF5F5F5), RoundedCornerShape(8.dp))
+                            .verticalScroll(rememberScrollState())
+                            .padding(12.dp)
+                            .fillMaxWidth()
+                    ) {
+                        Text(
+                            text = bodyText,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    
+                    val context = LocalContext.current
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedButton(
+                            onClick = { shareReceiptText(context, "Slip Pinjaman Sekolah", bodyText) },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Bagikan")
+                        }
+                        
+                        Button(
+                            onClick = { printReceiptText(context, "Slip_Pinjaman_Sekolah", bodyText) },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Print, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Unduh/Cetak")
+                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = { showPrintReceipt = false },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Tutup Preview")
+                    }
                 }
             }
         }
@@ -3205,6 +4178,8 @@ fun SchoolLoanItem(
 fun TeacherLoansScreen(viewModel: TabunganViewModel) {
     val context = LocalContext.current
     val loans by viewModel.pinjamanGuruList.collectAsState()
+    val schoolName by viewModel.schoolName.collectAsState()
+    val treasurerName by viewModel.treasurerName.collectAsState()
 
     var nameInput by remember { mutableStateOf("") }
     var amountInput by remember { mutableStateOf("") }
@@ -3212,6 +4187,7 @@ fun TeacherLoansScreen(viewModel: TabunganViewModel) {
 
     var showExportSuccess by remember { mutableStateOf(false) }
     var showExportError by remember { mutableStateOf(false) }
+    var showPrintSummaryDialog by remember { mutableStateOf(false) }
 
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("text/csv")
@@ -3367,41 +4343,69 @@ fun TeacherLoansScreen(viewModel: TabunganViewModel) {
         }
 
         item {
-            Row(
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Text(
                     text = "Daftar Pinjaman Guru / Staf (${groupedMap.size} Peminjam)",
                     fontWeight = FontWeight.Bold,
                     style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.weight(1f)
                 )
 
-                Spacer(modifier = Modifier.width(8.dp))
-
-                Button(
-                    onClick = {
-                        exportLauncher.launch("Rekap_Pinjaman_Sekolah_dan_Guru_${System.currentTimeMillis()}.csv")
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFF2E7D32), // Emerald Green
-                        contentColor = Color.White
-                    ),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                    shape = RoundedCornerShape(8.dp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    Button(
+                        onClick = {
+                            exportLauncher.launch("Rekap_Pinjaman_Sekolah_dan_Guru_${System.currentTimeMillis()}.csv")
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF2E7D32), // Emerald Green
+                            contentColor = Color.White
+                        ),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.weight(1f)
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Description,
-                            contentDescription = "Ekspor Excel Pinjaman",
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Text("Ekspor Excel", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Description,
+                                contentDescription = "Ekspor Excel Pinjaman",
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text("Ekspor Excel", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        }
+                    }
+
+                    Button(
+                        onClick = {
+                            showPrintSummaryDialog = true
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFFE65100), // Orange Accent
+                            contentColor = Color.White
+                        ),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Print,
+                                contentDescription = "Cetak Rekap Pinjaman",
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text("Cetak Rekap Aktif", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        }
                     }
                 }
             }
@@ -3473,6 +4477,125 @@ fun TeacherLoansScreen(viewModel: TabunganViewModel) {
             }
         )
     }
+
+    if (showPrintSummaryDialog) {
+        Dialog(onDismissRequest = { showPrintSummaryDialog = false }) {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                modifier = Modifier.padding(8.dp).fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text("Cetak Rekap Pinjaman Pendidik", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+
+                    val unpaidTeachers = groupedMap.filter { entry ->
+                        entry.value.any { !it.lunas }
+                    }
+
+                    val totalTagihanAktif = unpaidTeachers.values.flatten().sumOf { it.jumlahPinjam - it.jumlahBayar }
+
+                    val bodyText = buildString {
+                        append("         ${schoolName.uppercase(Locale("id", "ID"))}\n")
+                        append("      REKAPITULASI PIUTANG KAS\n")
+                        append("         PINJAMAN GURU & STAF\n")
+                        append("=================================\n")
+                        append("Hari/Tgl : ${SimpleDateFormat("dd/MM/yyyy HH:mm", Locale("id", "ID")).format(Date())}\n")
+                        append("=================================\n")
+                        
+                        if (unpaidTeachers.isEmpty()) {
+                            append("   Tidak ada tagihan pinjaman\n")
+                            append("        guru yang aktif.\n")
+                        } else {
+                            unpaidTeachers.entries.sortedBy { it.key.uppercase() }.forEach { (namaGuru, teacherLoans) ->
+                                append("GURU: ${namaGuru.uppercase()}\n")
+                                append("---------------------------------\n")
+                                teacherLoans.forEachIndexed { idx, loan ->
+                                    val dateStr = SimpleDateFormat("dd/MM/yyyy", Locale("id", "ID")).format(Date(loan.tanggalPinjam))
+                                    val statusLabel = when {
+                                        loan.lunas -> "LUNAS"
+                                        loan.jumlahBayar > 0.0 -> "CICIL"
+                                        else -> "BELUM LUNAS"
+                                    }
+                                    append(" #${idx + 1} $dateStr\n")
+                                    append("    Pinjaman : ${viewModel.formatRupiah(loan.jumlahPinjam)}\n")
+                                    if (loan.jumlahBayar > 0.0) {
+                                        append("    Dibayar  : ${viewModel.formatRupiah(loan.jumlahBayar)}\n")
+                                        val sisa = loan.jumlahPinjam - loan.jumlahBayar
+                                        append("    Sisa     : ${viewModel.formatRupiah(sisa)}\n")
+                                    }
+                                    append("    Status   : $statusLabel\n")
+                                }
+                                val teacherTotalSisa = teacherLoans.sumOf { it.jumlahPinjam - it.jumlahBayar }
+                                append("- - - - - - - - - - - - - - - - -\n")
+                                append("TOTAL HUTANG : ${viewModel.formatRupiah(teacherTotalSisa)}\n")
+                                append("=================================\n")
+                            }
+                        }
+                        
+                        append("TOTAL TAGIHAN AKTIF:\n")
+                        append(">> ${viewModel.formatRupiah(totalTagihanAktif)}\n")
+                        append("=================================\n")
+                        append("Bendahara: $treasurerName\n")
+                        append("=================================\n")
+                        append("     [TERVERIFIKASI SISTEM]\n")
+                        append("   Simulasi Printer POS-58mm")
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .heightIn(max = 280.dp)
+                            .background(Color(0xFFF5F5F5), RoundedCornerShape(8.dp))
+                            .verticalScroll(rememberScrollState())
+                            .padding(12.dp)
+                            .fillMaxWidth()
+                    ) {
+                        Text(
+                            text = bodyText,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedButton(
+                            onClick = { shareReceiptText(context, "Rekap Pinjaman Guru", bodyText) },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Bagikan")
+                        }
+                        
+                        Button(
+                            onClick = { printReceiptText(context, "Rekap_Pinjaman_Guru", bodyText) },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Print, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Unduh/Cetak")
+                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = { showPrintSummaryDialog = false },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Tutup Preview")
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -3485,7 +4608,10 @@ fun GroupedTeacherLoanCard(
     onDeleteIndividualClick: (PinjamanGuru) -> Unit,
     onExportIndividualClick: () -> Unit
 ) {
+    val schoolName by viewModel.schoolName.collectAsState()
+    val treasurerName by viewModel.treasurerName.collectAsState()
     var expanded by remember { mutableStateOf(false) }
+    var selectedLoanForReceipt by remember { mutableStateOf<PinjamanGuru?>(null) }
     val totalPinjam = loansList.sumOf { it.jumlahPinjam }
     val totalBayar = loansList.sumOf { it.jumlahBayar }
     val remaining = totalPinjam - totalBayar
@@ -3710,6 +4836,20 @@ fun GroupedTeacherLoanCard(
 
                                         Spacer(modifier = Modifier.width(8.dp))
 
+                                        IconButton(
+                                            onClick = { selectedLoanForReceipt = loan },
+                                            modifier = Modifier.size(24.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Print,
+                                                contentDescription = "Cetak Slip",
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+
+                                        Spacer(modifier = Modifier.width(8.dp))
+
                                         TextButton(
                                             onClick = { onPayIndividualClick(loan) },
                                             modifier = Modifier.height(24.dp),
@@ -3719,17 +4859,123 @@ fun GroupedTeacherLoanCard(
                                         }
                                     }
                                 } else {
-                                    loan.tanggalLunas?.let { tLunas ->
-                                        Text(
-                                            "Lunas: ${viewModel.formatDateShort(tLunas)}",
-                                            fontSize = 9.sp,
-                                            fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
-                                            color = Color.Gray
-                                        )
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        loan.tanggalLunas?.let { tLunas ->
+                                            Text(
+                                                "Lunas: ${viewModel.formatDateShort(tLunas)}",
+                                                fontSize = 9.sp,
+                                                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                                                color = Color.Gray
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = { selectedLoanForReceipt = loan },
+                                            modifier = Modifier.size(24.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Print,
+                                                contentDescription = "Cetak Slip",
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
                                     }
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    selectedLoanForReceipt?.let { sLoan ->
+        Dialog(onDismissRequest = { selectedLoanForReceipt = null }) {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                modifier = Modifier.padding(16.dp).fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text("Simulasi Cetak Slip", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    
+                    val sLoanRemaining = sLoan.jumlahPinjam - sLoan.jumlahBayar
+                    val bodyText = 
+                        "       BUKTI PINJAMAN KEUANGAN\n" +
+                        "         ${schoolName.uppercase(Locale("id", "ID"))}\n" +
+                        "=================================\n" +
+                        "ID Slip  : TAL-TEA-${sLoan.id}\n" +
+                        "Nama Guru: ${sLoan.namaGuru}\n" +
+                        "Tanggal  : ${viewModel.formatDate(sLoan.tanggalPinjam)}\n" +
+                        "---------------------------------\n" +
+                        "Plafon   : ${viewModel.formatRupiah(sLoan.jumlahPinjam)}\n" +
+                        "Angsuran : ${viewModel.formatRupiah(sLoan.jumlahBayar)}\n" +
+                        "Sisa     : ${viewModel.formatRupiah(sLoanRemaining)}\n" +
+                        "Status   : ${if (sLoan.lunas) "LUNAS SEPENUHNYAN" else "BELUM LUNAS"}\n" +
+                        "---------------------------------\n" +
+                        "Pemberitahu: $treasurerName\n" +
+                        "\n" +
+                        "Tanda Tangan Penerima / Guru:\n\n" +
+                        "      ( ____________________ )\n" +
+                        "=================================\n" +
+                        "     [TERVERIFIKASI SISTEM]\n" +
+                        "   Simulasi Printer POS-58mm"
+                        
+                    Box(
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .heightIn(max = 240.dp)
+                            .background(Color(0xFFF5F5F5), RoundedCornerShape(8.dp))
+                            .verticalScroll(rememberScrollState())
+                            .padding(12.dp)
+                            .fillMaxWidth()
+                    ) {
+                        Text(
+                            text = bodyText,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    
+                    val context = LocalContext.current
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedButton(
+                            onClick = { shareReceiptText(context, "Slip Pinjaman Guru", bodyText) },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Bagikan")
+                        }
+                        
+                        Button(
+                            onClick = { printReceiptText(context, "Slip_Pinjaman_Guru", bodyText) },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Print, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Unduh/Cetak")
+                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = { selectedLoanForReceipt = null },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Tutup Preview")
                     }
                 }
             }
@@ -5253,7 +6499,10 @@ fun SetorCardItem(
     viewModel: TabunganViewModel,
     isDeletable: Boolean
 ) {
+    val schoolName by viewModel.schoolName.collectAsState()
+    val treasurerName by viewModel.treasurerName.collectAsState()
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    var showPrintDialog by remember { mutableStateOf(false) }
     val dateFormat = SimpleDateFormat("EEEE, dd MMM yyyy HH:mm", Locale("id", "ID"))
 
     Card(
@@ -5331,6 +6580,15 @@ fun SetorCardItem(
                 }
             }
 
+            IconButton(onClick = { showPrintDialog = true }) {
+                Icon(
+                    imageVector = Icons.Default.Print,
+                    contentDescription = "Cetak",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
             if (isDeletable) {
                 IconButton(onClick = { showDeleteConfirm = true }) {
                     Icon(
@@ -5366,6 +6624,122 @@ fun SetorCardItem(
             }
         )
     }
+
+    if (showPrintDialog) {
+        Dialog(onDismissRequest = { showPrintDialog = false }) {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                modifier = Modifier.padding(16.dp).fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text("Simulasi Cetak Slip", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    
+                    val bText = 
+                        "       SLIP SETORAN TUNAI KAS\n" +
+                        "         ${schoolName.uppercase(Locale("id", "ID"))}\n" +
+                        "     BENDAHARA KE REKENING/BANK\n" +
+                        "=================================\n" +
+                        "ID Slip  : SET-KOP-${setor.id}\n" +
+                        "Penyetor : $treasurerName\n" +
+                        "Penerima : ${setor.penerima}\n" +
+                        "Tanggal  : ${dateFormat.format(Date(setor.tanggal))}\n" +
+                        "---------------------------------\n" +
+                        "Jumlah   : ${viewModel.formatRupiah(setor.jumlah)}\n" +
+                        "Status   : SUKSES DISETORKAN\n" +
+                        "Sisa Kas : Terkoreksi Otomatis\n" +
+                        "---------------------------------\n" +
+                        "Ttd Bendahara & Penerima:\n"
+                        
+                    Column(
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .heightIn(max = 280.dp)
+                            .background(Color(0xFFF5F5F5), RoundedCornerShape(8.dp))
+                            .verticalScroll(rememberScrollState())
+                            .padding(12.dp)
+                            .fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = bText,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        
+                        Spacer(modifier = Modifier.height(10.dp))
+                        
+                        if (!setor.ttdOnline.isNullOrEmpty()) {
+                            Text(
+                                "Tanda Tangan Penerima (Digital):",
+                                fontSize = 9.sp,
+                                color = Color.Gray,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(bottom = 4.dp)
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .width(110.dp)
+                                    .height(64.dp)
+                                    .background(Color.White, RoundedCornerShape(4.dp))
+                                    .border(1.dp, Color.Gray.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                                    .padding(4.dp)
+                            ) {
+                                SignatureThumbnail(
+                                    serialized = setor.ttdOnline!!,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+                        } else {
+                            Text(
+                                "Tanda Tangan Manual:\n\n\n     ( ___________________ )",
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                fontSize = 10.sp,
+                                color = Color.DarkGray
+                            )
+                        }
+                    }
+                    
+                    val context = LocalContext.current
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedButton(
+                            onClick = { shareReceiptText(context, "Slip Setoran Tunai Kas", bText) },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Bagikan")
+                        }
+                        
+                        Button(
+                            onClick = { printReceiptText(context, "Slip_Setoran_Tunai", bText) },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Print, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Unduh/Cetak")
+                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = { showPrintDialog = false },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Tutup Preview")
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -5375,6 +6749,8 @@ fun SetorTabunganScreen(viewModel: TabunganViewModel) {
     val allSetor by viewModel.allSetorKoperasi.collectAsState()
     val totalSetor by viewModel.totalSetorKoperasi.collectAsState()
     val saldoBendahara by viewModel.saldoBendahara.collectAsState()
+    val schoolName by viewModel.schoolName.collectAsState()
+    val treasurerName by viewModel.treasurerName.collectAsState()
 
     var amountInput by remember { mutableStateOf("") }
     var recipientInput by remember { mutableStateOf("Kepala Sekolah") }
@@ -5386,6 +6762,7 @@ fun SetorTabunganScreen(viewModel: TabunganViewModel) {
 
     var showExportSuccess by remember { mutableStateOf(false) }
     var showExportError by remember { mutableStateOf(false) }
+    var showPrintSetorSummaryDialog by remember { mutableStateOf(false) }
 
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("text/csv")
@@ -5593,37 +6970,70 @@ fun SetorTabunganScreen(viewModel: TabunganViewModel) {
         }
 
         item {
-            Row(
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Text(
-                    "Riwayat Setor Tabungan (${allSetor.size})",
-                    fontWeight = FontWeight.Bold,
+                    text = "Riwayat Setor Tabungan (${allSetor.size})",
                     style = MaterialTheme.typography.titleMedium
                 )
 
                 if (allSetor.isNotEmpty()) {
-                    Button(
-                        onClick = {
-                            exportLauncher.launch("Laporan_Setor_Tabungan_${System.currentTimeMillis()}.csv")
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF2E7D32),
-                            contentColor = Color.White
-                        ),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.height(34.dp)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Description,
-                            contentDescription = "Ekspor Excel",
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Ekspor Excel", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        Button(
+                            onClick = {
+                                exportLauncher.launch("Laporan_Setor_Tabungan_${System.currentTimeMillis()}.csv")
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF2E7D32),
+                                contentColor = Color.White
+                            ),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Description,
+                                    contentDescription = "Ekspor Excel",
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text("Ekspor Excel", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                            }
+                        }
+
+                        Button(
+                            onClick = {
+                                showPrintSetorSummaryDialog = true
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFFE65100), // Orange Accent
+                                contentColor = Color.White
+                            ),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Print,
+                                    contentDescription = "Cetak Rekap Setor",
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text("Cetak Rekap Setor", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                            }
+                        }
                     }
                 }
             }
@@ -5690,5 +7100,106 @@ fun SetorTabunganScreen(viewModel: TabunganViewModel) {
                 }
             }
         )
+    }
+
+    if (showPrintSetorSummaryDialog) {
+        Dialog(onDismissRequest = { showPrintSetorSummaryDialog = false }) {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                modifier = Modifier.padding(8.dp).fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text("Cetak Rekap Setoran Dana", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+
+                    val totalSeluruhSetor = allSetor.sumOf { it.jumlah }
+
+                    val bodyText = buildString {
+                        append("         ${schoolName.uppercase(Locale("id", "ID"))}\n")
+                        append("      REKAPITULASI PENYERAHAN\n")
+                        append("          SETORAN TABUNGAN\n")
+                        append("=================================\n")
+                        append("Hari/Tgl : ${SimpleDateFormat("dd/MM/yyyy HH:mm", Locale("id", "ID")).format(Date())}\n")
+                        append("=================================\n")
+                        
+                        if (allSetor.isEmpty()) {
+                            append("     Tidak ada riwayat setoran\n")
+                            append("          yang tercatat.\n")
+                        } else {
+                            allSetor.sortedByDescending { it.tanggal }.forEachIndexed { idx, s ->
+                                val dateStr = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale("id", "ID")).format(Date(s.tanggal))
+                                append("#${idx + 1} Tgl  : $dateStr\n")
+                                append("   Jumlah : ${viewModel.formatRupiah(s.jumlah)}\n")
+                                append("   Penerima: ${s.penerima}\n")
+                                if (!s.ttdOnline.isNullOrEmpty()) {
+                                    append("   Ttd     : [Tanda Tangan Online]\n")
+                                }
+                                append("- - - - - - - - - - - - - - - - -\n")
+                            }
+                        }
+                        
+                        append("TOTAL SETORAN TERDATA:\n")
+                        append(">> ${viewModel.formatRupiah(totalSeluruhSetor)}\n")
+                        append("=================================\n")
+                        append("Bendahara: $treasurerName\n")
+                        append("=================================\n")
+                        append("     [TERVERIFIKASI SISTEM]\n")
+                        append("   Simulasi Printer POS-58mm")
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .heightIn(max = 280.dp)
+                            .background(Color(0xFFF5F5F5), RoundedCornerShape(8.dp))
+                            .verticalScroll(rememberScrollState())
+                            .padding(12.dp)
+                            .fillMaxWidth()
+                    ) {
+                        Text(
+                            text = bodyText,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedButton(
+                            onClick = { shareReceiptText(context, "Rekap Setoran Tabungan", bodyText) },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Bagikan")
+                        }
+                        
+                        Button(
+                            onClick = { printReceiptText(context, "Rekap_Setoran_Tabungan", bodyText) },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Print, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Unduh/Cetak")
+                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = { showPrintSetorSummaryDialog = false },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Tutup Preview")
+                    }
+                }
+            }
+        }
     }
 }

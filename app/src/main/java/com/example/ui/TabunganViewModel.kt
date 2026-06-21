@@ -52,6 +52,22 @@ class TabunganViewModel(
         sharedPrefs.edit().putString("app_theme_pref", newTheme).apply()
     }
 
+    // Dynamic School & Treasurer Identity Configuration (Flexible Settings)
+    private val _schoolName = MutableStateFlow(sharedPrefs.getString("school_name_pref", "MIS CIBUNGUR I") ?: "MIS CIBUNGUR I")
+    val schoolName: StateFlow<String> = _schoolName.asStateFlow()
+
+    private val _treasurerName = MutableStateFlow(sharedPrefs.getString("treasurer_name_pref", "Cepi Sopyan, S.Pd.I") ?: "Cepi Sopyan, S.Pd.I")
+    val treasurerName: StateFlow<String> = _treasurerName.asStateFlow()
+
+    fun updateIdentitySettings(school: String, treasurer: String) {
+        _schoolName.value = school.trim().uppercase()
+        _treasurerName.value = treasurer.trim()
+        sharedPrefs.edit()
+            .putString("school_name_pref", school.trim().uppercase())
+            .putString("treasurer_name_pref", treasurer.trim())
+            .apply()
+    }
+
     fun verifyPassword(role: UserRole, input: String): Boolean {
         val stored = sharedPrefs.getString("pwd_${role.name}", getDefaultPassword(role))
         return stored == input
